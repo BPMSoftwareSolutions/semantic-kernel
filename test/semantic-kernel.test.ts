@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createSemanticKernel, executeRelationalQuery, SemanticKernel, SemanticKernelError } from "../src/index.js";
+import { createSemanticKernel, SemanticKernel, SemanticKernelError } from "../src/index.js";
 
 const kernel = new SemanticKernel();
 kernel.catalog.registerDecision({
@@ -40,7 +40,6 @@ test("fails closed when a required projection path is absent", () => {
     (error: unknown) => error instanceof SemanticKernelError && error.code === "PROJECTION_REQUIRED_PATH_MISSING",
   );
 });
-
 test("filters, maps, and counts collections through declared projection expressions", () => {
   const collectionKernel = new SemanticKernel();
   const filtered = {
@@ -129,53 +128,4 @@ test("seats validated port adapters and rejects invalid packs", async () => {
     () => packedKernel.registerCapabilityPacks([{ decisions: "not-an-array" }]),
     (error: unknown) => error instanceof SemanticKernelError && error.code === "INVALID_CAPABILITY_PACK",
   );
-});
-
-test("executes a domain-neutral relational plan with joins grouping and aggregation", () => {
-  const result = executeRelationalQuery({
-    planType: "relational-query-plan.v1",
-    ctes: {},
-    from: { sourceId: "orders", alias: "o" },
-    joins: [{
-      kind: "inner",
-      source: { sourceId: "customers", alias: "c" },
-      on: {
-        kind: "binary",
-        operator: "equals",
-        left: { kind: "reference", path: ["o", "customerId"] },
-        right: { kind: "reference", path: ["c", "id"] },
-      },
-    }],
-    groupBy: [{ kind: "reference", path: ["c", "name"] }],
-    selections: [
-      { expression: { kind: "reference", path: ["c", "name"] }, alias: "customer" },
-      {
-        expression: {
-          kind: "call",
-          function: "sum",
-          arguments: [{ kind: "reference", path: ["o", "amount"] }],
-        },
-        alias: "total",
-      },
-    ],
-    distinct: false,
-    orderBy: [{ expression: { kind: "reference", path: ["total"] }, direction: "descending" }],
-    offset: 0,
-  }, {
-    orders: [
-      { customerId: 1, amount: 4 },
-      { customerId: 1, amount: 6 },
-      { customerId: 2, amount: 3 },
-    ],
-    customers: [{ id: 1, name: "Ada" }, { id: 2, name: "Lin" }],
-  });
-
-  assert.deepEqual(result, {
-    columns: ["customer", "total"],
-    rows: [
-      { customer: "Ada", total: 10 },
-      { customer: "Lin", total: 3 },
-    ],
-    rowCount: 2,
-  });
 });

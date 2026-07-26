@@ -25,6 +25,10 @@ Receipt             = observed testimony
 
 The kernel must never learn that a particular provider finish reason means “completed,” that a target conflict means “replace,” or that a repository heading deserves emphasis. Those remain semantic declarations supplied by capabilities.
 
+It must likewise never own SQL grammar, relational query plans, joins,
+grouping, aggregation, or query-result behavior. Those belong to a query
+capability and its replaceable mechanical adapters.
+
 ## Use
 
 ```ts
