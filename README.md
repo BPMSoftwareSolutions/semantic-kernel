@@ -11,7 +11,7 @@ A small, domain-neutral runtime that interprets declared semantic authority. Dom
 - Declared collection iteration.
 - Registered mechanical ports.
 - Ordered execution models.
-- Consumer-supplied, deterministic code projectors.
+- Shipped deterministic code-body compiler with an optional backend extension API.
 - Step testimony, observations, final results, and failure receipts.
 
 ## Architectural boundary
@@ -43,30 +43,36 @@ kernel.ports.register("copies-file", copiesFileAdapter);
 const receipt = await kernel.execute("copy-one-file", immutableContext);
 ```
 
-## Consumer-owned code projection
+## Declarative code-body projection
 
-The kernel does not contain application templates. A consumer registers a
-projector that owns its target language, framework, imports, mechanics, and
-artifact layout:
+Application consumers do not implement projector modules. The kernel ships
+versioned compiler backends, including a general structured TypeScript ESM
+backend:
 
 ```ts
-const kernel = createSemanticKernel({ codeProjectors: [myProjector] });
-const projection = await kernel.projectCode("my-app.node-cli.v1", semanticAuthority);
+const kernel = createSemanticKernel();
+const projection = await kernel.projectCode(
+  "semantic-kernel/declarative-typescript.v1",
+  sejCodeBodyAuthority,
+);
 ```
 
-A projector receives immutable snapshots of `authority` and `options` and
-returns one or more relative-path text artifacts. The kernel validates the
-artifacts and adds deterministic SHA-256 identities. The packaged
-`semantic-project` command can load the same consumer projector:
+`declarative-typescript-projection.v1` is a structured code-body IR. It models
+imports, interfaces, types, functions, classes, variables, expressions,
+branching, iteration, switches, and exception boundaries. It intentionally has
+no raw-source or arbitrary-template escape hatch.
+
+The packaged CLI selects the backend by its stable identity:
 
 ```bash
-semantic-project ./projectors/my-projector.mjs ./authority.json ./generated
-semantic-project ./projectors/my-projector.mjs ./authority.json ./generated --options ./projection-options.json
-semantic-project ./projectors/my-projector.mjs ./authority.json ./generated --check
+semantic-project ./body.sej.json ./generated
+semantic-project ./body.sej.json ./generated --check
 ```
 
-The CLI only loads, writes, and verifies artifacts; it owns no generated
-application body.
+The kernel validates the IR, emits deterministic artifacts, and records
+authority, options, and artifact SHA-256 identities. Custom `CodeProjector`
+registration remains an extension point for platform authors adding a new
+language backend; it is not required of application consumers.
 
 ## Commands
 

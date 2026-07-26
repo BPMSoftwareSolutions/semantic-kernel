@@ -14,6 +14,7 @@ import { readPath, writePath } from "./path-accessor.js";
 import { applyProjection } from "./projection-engine.js";
 import { CodeProjectorRegistry } from "../projection/code-projector-registry.js";
 import { projectCode as executeCodeProjection } from "../projection/project-code.js";
+import { declarativeTypeScriptProjector } from "../projectors/declarative-typescript-projector.js";
 
 export type SemanticInvocation = (context: unknown) => unknown | Promise<unknown>;
 
@@ -39,7 +40,7 @@ export class SemanticKernel {
   public constructor(
     public readonly catalog = new SemanticCatalog(),
     public readonly ports = new PortRegistry(),
-    public readonly codeProjectors = new CodeProjectorRegistry(),
+    public readonly codeProjectors = createDefaultCodeProjectorRegistry(),
   ) {
     this.edges = Object.freeze({
       invokes: async <TResult = unknown>(semanticIdentity: string, context: unknown): Promise<TResult> =>
@@ -156,6 +157,10 @@ export function createSemanticKernel(options: SemanticKernelOptions = {}): Seman
   const kernel = new SemanticKernel();
   for (const projector of options.codeProjectors ?? []) kernel.codeProjectors.register(projector);
   return kernel;
+}
+
+function createDefaultCodeProjectorRegistry(): CodeProjectorRegistry {
+  return new CodeProjectorRegistry().register(declarativeTypeScriptProjector);
 }
 
 function requireCapabilityPack(candidate: unknown): CapabilityPack {

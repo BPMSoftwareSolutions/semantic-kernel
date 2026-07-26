@@ -1,0 +1,41 @@
+{
+  "projectionType": "declarative-typescript-projection.v1",
+  "projectionId": "project-greeting-body",
+  "version": "1.0.0",
+  "targetId": "typescript-esm",
+  "artifacts": [
+    {
+      "path": "src/greeting.ts",
+      "declarations": [
+        {
+          "kind": "function",
+          "name": "greet",
+          "export": true,
+          "parameters": [
+            {
+              "name": "name",
+              "type": "string"
+            }
+          ],
+          "returnType": "string",
+          "body": [
+            {
+              "kind": "return",
+              "expression": {
+                "kind": "template",
+                "parts": [
+                  "Hello, ",
+                  {
+                    "kind": "identifier",
+                    "name": "name"
+                  },
+                  "!"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

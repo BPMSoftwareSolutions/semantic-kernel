@@ -402,7 +402,10 @@ There is a useful distinction here.
 
 The **kernel** interprets the semantic primitives.
 
-The **language projector** generates language-native bodies, types, registrations, and adapters.
+The kernel's **shipped language compiler** generates language-native bodies,
+types, registrations, and adapters from structured SEJ authority. Application
+consumers select a compiler identity; they do not implement executable
+projector modules.
 
 ```text
 Canonical capability authority
@@ -421,7 +424,7 @@ Semantic Kernel   Language Projector
 Executes authority at runtime
 ```
 
-The projector may generate:
+Each shipped compiler may generate:
 
 ```text
 context types
@@ -434,6 +437,10 @@ entrypoint wiring
 ```
 
 But it does not redefine the capability meaning.
+
+An executable `CodeProjector` registration is reserved for kernel platform
+authors implementing an additional language backend. It is not part of the
+application-consumer projection workflow.
 
 # Per-Language Repository Shape
 

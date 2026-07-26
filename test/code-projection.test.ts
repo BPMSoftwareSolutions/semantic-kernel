@@ -6,32 +6,119 @@ import path from "node:path";
 import test from "node:test";
 import {
   createSemanticKernel,
+  declarativeTypeScriptProjector,
   SemanticKernelError,
   type CodeProjector,
+  type DeclarativeTypeScriptProjection,
 } from "../src/index.js";
 
-test("consumer projectors own distinct code bodies and artifact layouts", async () => {
+test("shipped TypeScript compiler projects materially different bodies from SEJ and emits compilable source", async () => {
+  const authority = diverseTypeScriptAuthority();
+  const kernel = createSemanticKernel();
+  const first = await kernel.projectCode(declarativeTypeScriptProjector.projectorId, authority);
+  const second = await kernel.projectCode(declarativeTypeScriptProjector.projectorId, structuredClone(authority));
+
+  assert.deepEqual(first, second);
+  assert.equal(first.artifacts.length, 2);
+  const workflow = first.artifacts.find((artifact) => artifact.path === "src/workflow.ts")?.content ?? "";
+  const classifier = first.artifacts.find((artifact) => artifact.path === "src/classifier.ts")?.content ?? "";
+  assert.match(workflow, /for \(const item of items\)/u);
+  assert.match(workflow, /if \(item\.enabled\)/u);
+  assert.match(workflow, /try \{/u);
+  assert.match(workflow, /catch \(error\)/u);
+  assert.match(classifier, /switch \(value\)/u);
+  assert.doesNotMatch(workflow, /projector\.mjs|CodeProjector/u);
+
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "declarative-typescript-"));
+  try {
+    for (const artifact of first.artifacts) {
+      const destination = path.join(temporary, ...artifact.path.split("/"));
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.writeFileSync(destination, artifact.content, "utf8");
+    }
+    const compiled = spawnSync(process.execPath, [
+      path.resolve("node_modules/typescript/bin/tsc"),
+      "--noEmit",
+      "--strict",
+      "--target", "ES2022",
+      "--module", "NodeNext",
+      "--moduleResolution", "NodeNext",
+      ...first.artifacts.map((artifact) => path.join(temporary, ...artifact.path.split("/"))),
+    ], { encoding: "utf8" });
+    assert.equal(compiled.status, 0, compiled.stdout + compiled.stderr);
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test("CLI infers the shipped TypeScript compiler from SEJ without a projector argument", () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "declarative-typescript-cli-"));
+  try {
+    const authorityPath = path.join(temporary, "body.sej.json");
+    const outputPath = path.join(temporary, "generated");
+    fs.writeFileSync(authorityPath, JSON.stringify(diverseTypeScriptAuthority()), "utf8");
+    const projected = runCli([
+      authorityPath,
+      outputPath,
+    ]);
+    assert.equal(projected.status, 0, projected.stderr);
+    assert.equal(fs.existsSync(path.join(outputPath, "src", "workflow.ts")), true);
+    assert.equal(runCli([
+      authorityPath,
+      outputPath,
+      "--check",
+    ]).status, 0);
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test("declarative TypeScript compiler rejects source injection and malformed identifiers", async () => {
+  const kernel = createSemanticKernel();
+  const unsafe = diverseTypeScriptAuthority() as unknown as {
+    artifacts: Array<{ declarations: Array<{ name?: string; returnType?: string }> }>;
+  };
+  unsafe.artifacts[0]!.declarations[1]!.name = "run; process.exit()";
+  await assert.rejects(kernel.projectCode(declarativeTypeScriptProjector.projectorId, unsafe), /Invalid TypeScript identifier/u);
+
+  const unsafeType = structuredClone(diverseTypeScriptAuthority()) as unknown as {
+    artifacts: Array<{ declarations: Array<{ name?: string; returnType?: string }> }>;
+  };
+  unsafeType.artifacts[0]!.declarations[1]!.returnType = "string; process.exit()";
+  await assert.rejects(kernel.projectCode(declarativeTypeScriptProjector.projectorId, unsafeType), /Unsafe TypeScript type text/u);
+
+  const rawEscape = structuredClone(diverseTypeScriptAuthority()) as unknown as {
+    artifacts: Array<{ declarations: Array<Record<string, unknown>> }>;
+  };
+  rawEscape.artifacts[0]!.declarations[1]!.rawSource = "process.exit()";
+  await assert.rejects(
+    kernel.projectCode(declarativeTypeScriptProjector.projectorId, rawEscape),
+    /unsupported fields: rawSource/u,
+  );
+});
+
+test("optional platform backends can add distinct target languages and artifact layouts", async () => {
   const first: CodeProjector = {
-    projectorId: "consumer.first.v1",
+    projectorId: "platform.javascript-backend.v1",
     project: ({ authority }) => ({
       targetId: "javascript.esm.v1",
       artifacts: [{ path: "commands/first.mjs", content: `export default ${JSON.stringify(authority)};\n` }],
     }),
   };
   const second: CodeProjector = {
-    projectorId: "consumer.second.v1",
+    projectorId: "platform.python-backend.v1",
     project: () => ({
       targetId: "python.v1",
       artifacts: [
-        { path: "app.py", content: "print('consumer-owned')\n", executable: true },
+        { path: "app.py", content: "print('platform-backend')\n", executable: true },
         { path: "requirements.txt", content: "" },
       ],
     }),
   };
   const kernel = createSemanticKernel({ codeProjectors: [first, second] });
 
-  const firstReceipt = await kernel.edges.projectsCode("consumer.first.v1", { meaning: "one" });
-  const secondReceipt = await kernel.projectCode("consumer.second.v1", { meaning: "two" });
+  const firstReceipt = await kernel.edges.projectsCode("platform.javascript-backend.v1", { meaning: "one" });
+  const secondReceipt = await kernel.projectCode("platform.python-backend.v1", { meaning: "two" });
 
   assert.equal(firstReceipt.artifacts[0]?.path, "commands/first.mjs");
   assert.match(firstReceipt.artifacts[0]?.content ?? "", /"meaning":"one"/u);
@@ -95,7 +182,7 @@ test("code projection fails closed for missing projectors and unsafe or duplicat
   );
 });
 
-test("code projection rejects cyclic and non-finite authority before invoking a consumer", async () => {
+test("code projection rejects cyclic and non-finite authority before invoking a backend", async () => {
   let invoked = false;
   const kernel = createSemanticKernel({
     codeProjectors: [{
@@ -120,7 +207,7 @@ test("code projection rejects cyclic and non-finite authority before invoking a 
   assert.equal(invoked, false);
 });
 
-test("packaged CLI loads a consumer projector, writes artifacts, and detects staleness", () => {
+test("CLI supports optional third-party language backends and detects stale artifacts", () => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "semantic-project-cli-"));
   try {
     const projectorPath = path.join(temporary, "projector.mjs");
@@ -129,7 +216,7 @@ test("packaged CLI loads a consumer projector, writes artifacts, and detects sta
     const outputPath = path.join(temporary, "generated");
     fs.writeFileSync(projectorPath, `
 export const projector = {
-  projectorId: "consumer.cli-test.v1",
+  projectorId: "platform.cli-test-backend.v1",
   project: ({ authority, options }) => ({
     targetId: "javascript.esm.v1",
     artifacts: [
@@ -165,50 +252,7 @@ export const projector = {
   }
 });
 
-test("file-catalog consumer projector rejects incomplete semantic authority", () => {
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "semantic-project-invalid-"));
-  try {
-    const authorityPath = path.join(temporary, "authority.json");
-    fs.writeFileSync(authorityPath, JSON.stringify({
-      semanticLayer: "projectable-cli.v1",
-      capabilityId: "incomplete",
-      command: { name: "broken", description: "Broken" },
-      source: { kind: "filesystem-entries", root: { fromInput: "path" } },
-      inputs: [{ id: "path", kind: "positional", description: "Path", default: "." }],
-      options: [],
-      selection: [{ id: "file", fromSource: "relativePath" }],
-      presentation: { columns: [{ field: "file", label: "FILE", format: "text", align: "left" }], emptyMessage: "Empty" },
-    }), "utf8");
-    const result = runCli([
-      path.resolve("examples/file-catalog/projectors/node-cli.projector.mjs"),
-      authorityPath,
-      path.join(temporary, "generated"),
-    ]);
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /source\.entryKinds must not be empty/u);
-  } finally {
-    fs.rmSync(temporary, { recursive: true, force: true });
-  }
-});
-
-test("checked-in file-catalog projection is current and executable", () => {
-  const current = runCli([
-    path.resolve("examples/file-catalog/projectors/node-cli.projector.mjs"),
-    path.resolve("examples/file-catalog/semantic-authority/file-catalog.cli.v1.json"),
-    path.resolve("examples/file-catalog/generated"),
-    "--check",
-  ]);
-  assert.equal(current.status, 0, current.stderr);
-
-  const executed = spawnSync(process.execPath, [
-    path.resolve("examples/file-catalog/generated/file-catalog.mjs"),
-    "--help",
-  ], { cwd: process.cwd(), encoding: "utf8" });
-  assert.equal(executed.status, 0, executed.stderr);
-  assert.match(executed.stdout, /Usage: file-catalog/u);
-});
-
-test("packed downstream consumer can import the API and run its own projector through the shipped CLI", () => {
+test("packed downstream consumer projects SEJ through the shipped backend without authoring a projector", async () => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "semantic-project-packed-"));
   try {
     const packed = runNpm(["pack", "--json", "--pack-destination", temporary], {
@@ -225,21 +269,13 @@ test("packed downstream consumer can import the API and run its own projector th
     });
     assert.equal(installed.status, 0, installed.stderr);
 
-    fs.writeFileSync(path.join(consumer, "projector.mjs"), `
-export const projector = {
-  projectorId: "downstream.custom.v1",
-  project: ({ authority }) => ({
-    targetId: "downstream.module.v1",
-    artifacts: [{ path: "custom.mjs", content: "export const consumer = " + JSON.stringify(authority.name) + ";\\n" }]
-  })
-};
-`, "utf8");
-    fs.writeFileSync(path.join(consumer, "authority.json"), JSON.stringify({ name: "packed-client" }), "utf8");
+    fs.writeFileSync(path.join(consumer, "authority.json"), JSON.stringify(diverseTypeScriptAuthority()), "utf8");
     fs.writeFileSync(path.join(consumer, "verify.mjs"), `
 import { createSemanticKernel } from "@deterministic-solutions/semantic-kernel";
-import { projector } from "./projector.mjs";
-const receipt = await createSemanticKernel({ codeProjectors: [projector] }).projectCode(projector.projectorId, { name: "packed-client" });
-if (receipt.artifacts[0].path !== "custom.mjs") process.exitCode = 1;
+import { readFile } from "node:fs/promises";
+const authority = JSON.parse(await readFile(new URL("./authority.json", import.meta.url), "utf8"));
+const receipt = await createSemanticKernel().projectCode("semantic-kernel/declarative-typescript.v1", authority);
+if (!receipt.artifacts.some((artifact) => artifact.path === "src/workflow.ts")) process.exitCode = 1;
 `, "utf8");
 
     const imported = spawnSync(process.execPath, ["verify.mjs"], { cwd: consumer, encoding: "utf8" });
@@ -255,14 +291,15 @@ if (receipt.artifacts[0].path !== "custom.mjs") process.exitCode = 1;
     );
     const projected = spawnSync(process.execPath, [
       cliPath,
-      "projector.mjs",
       "authority.json",
       "generated",
     ], { cwd: consumer, encoding: "utf8" });
     assert.equal(projected.status, 0, projected.stderr);
     assert.equal(
-      fs.readFileSync(path.join(consumer, "generated", "custom.mjs"), "utf8"),
-      'export const consumer = "packed-client";\n',
+      fs.readFileSync(path.join(consumer, "generated", "src", "classifier.ts"), "utf8"),
+      (await createSemanticKernel()
+        .projectCode("semantic-kernel/declarative-typescript.v1", diverseTypeScriptAuthority()))
+        .artifacts.find((artifact) => artifact.path === "src/classifier.ts")?.content,
     );
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
@@ -274,6 +311,137 @@ function runCli(arguments_: string[]): Readonly<{ status: number | null; stdout:
     cwd: process.cwd(),
     encoding: "utf8",
   });
+}
+
+function diverseTypeScriptAuthority(): DeclarativeTypeScriptProjection {
+  return {
+    projectionType: "declarative-typescript-projection.v1",
+    projectionId: "project-diverse-app-bodies",
+    version: "1.0.0",
+    targetId: "typescript-esm",
+    artifacts: [
+      {
+        path: "src/workflow.ts",
+        declarations: [
+          {
+            kind: "interface",
+            name: "WorkItem",
+            export: true,
+            members: [
+              { kind: "property", name: "id", type: "string", readonly: true },
+              { kind: "property", name: "enabled", type: "boolean", readonly: true },
+            ],
+          },
+          {
+            kind: "function",
+            name: "runsWorkflow",
+            export: true,
+            async: true,
+            parameters: [
+              { name: "items", type: "readonly WorkItem[]" },
+              { name: "handler", type: "(id: string) => Promise<string>" },
+            ],
+            returnType: "Promise<readonly string[]>",
+            body: [
+              {
+                kind: "variable",
+                declarationKind: "const",
+                name: "results",
+                type: "string[]",
+                value: { kind: "array", items: [] },
+              },
+              {
+                kind: "for-of",
+                declarationKind: "const",
+                name: "item",
+                iterable: { kind: "identifier", name: "items" },
+                body: [{
+                  kind: "if",
+                  condition: {
+                    kind: "member",
+                    object: { kind: "identifier", name: "item" },
+                    property: "enabled",
+                  },
+                  then: [{
+                    kind: "try",
+                    body: [{
+                      kind: "expression",
+                      expression: {
+                        kind: "call",
+                        callee: {
+                          kind: "member",
+                          object: { kind: "identifier", name: "results" },
+                          property: "push",
+                        },
+                        arguments: [{
+                          kind: "await",
+                          expression: {
+                            kind: "call",
+                            callee: { kind: "identifier", name: "handler" },
+                            arguments: [{
+                              kind: "member",
+                              object: { kind: "identifier", name: "item" },
+                              property: "id",
+                            }],
+                          },
+                        }],
+                      },
+                    }],
+                    catch: {
+                      binding: "error",
+                      body: [{
+                        kind: "throw",
+                        expression: {
+                          kind: "new",
+                          callee: { kind: "identifier", name: "Error" },
+                          arguments: [{
+                            kind: "template",
+                            parts: ["Handler failed: ", {
+                              kind: "call",
+                              callee: { kind: "identifier", name: "String" },
+                              arguments: [{ kind: "identifier", name: "error" }],
+                            }],
+                          }],
+                        },
+                      }],
+                    },
+                  }],
+                }],
+              },
+              { kind: "return", expression: { kind: "identifier", name: "results" } },
+            ],
+          },
+        ],
+      },
+      {
+        path: "src/classifier.ts",
+        declarations: [{
+          kind: "function",
+          name: "classifiesValue",
+          export: true,
+          parameters: [{ name: "value", type: "string" }],
+          returnType: "string",
+          body: [{
+            kind: "switch",
+            expression: { kind: "identifier", name: "value" },
+            cases: [
+              {
+                test: { kind: "literal", value: "a" },
+                body: [{ kind: "return", expression: { kind: "literal", value: "alpha" } }],
+              },
+              {
+                test: { kind: "literal", value: "b" },
+                body: [{ kind: "return", expression: { kind: "literal", value: "beta" } }],
+              },
+              {
+                body: [{ kind: "return", expression: { kind: "literal", value: "other" } }],
+              },
+            ],
+          }],
+        }],
+      },
+    ],
+  };
 }
 
 function runNpm(

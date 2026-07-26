@@ -6,6 +6,7 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import type { CodeProjectionReceipt, CodeProjector } from "../contracts/code-projection.contract.js";
 import { createSemanticKernel } from "../kernel/semantic-kernel.js";
+import { declarativeTypeScriptProjector } from "../projectors/declarative-typescript-projector.js";
 
 const MANIFEST_NAME = ".semantic-projection.json";
 
@@ -22,22 +23,27 @@ async function main(arguments_: string[]): Promise<void> {
     return;
   }
   const { check, optionsPath, positionals } = parseArguments(arguments_);
-  if (positionals.length !== 3) {
+  if (positionals.length !== 2 && positionals.length !== 3) {
     printHelp();
     process.exitCode = 2;
     return;
   }
 
-  const [projectorArgument, authorityArgument, outputArgument] = positionals as [string, string, string];
+  const [projectorArgument, authorityArgument, outputArgument] = positionals.length === 3
+    ? positionals as [string, string, string]
+    : [undefined, ...positionals] as [undefined, string, string];
   const authorityPath = path.resolve(authorityArgument);
   const outputDirectory = path.resolve(outputArgument);
-  const module = await import(projectorSpecifier(projectorArgument)) as Readonly<Record<string, unknown>>;
-  const projector = selectProjector(module);
   const authority = JSON.parse(await readFile(authorityPath, "utf8")) as unknown;
+  const selectedProjector = projectorArgument ?? inferBuiltInProjector(authority);
+  const builtIn = selectedProjector === declarativeTypeScriptProjector.projectorId;
+  const projector = builtIn
+    ? declarativeTypeScriptProjector
+    : selectProjector(await import(projectorSpecifier(selectedProjector)) as Readonly<Record<string, unknown>>);
   const options = optionsPath === undefined
     ? {}
     : JSON.parse(await readFile(path.resolve(optionsPath), "utf8")) as unknown;
-  const kernel = createSemanticKernel({ codeProjectors: [projector] });
+  const kernel = builtIn ? createSemanticKernel() : createSemanticKernel({ codeProjectors: [projector] });
   const receipt = await kernel.edges.projectsCode(projector.projectorId, authority, options);
 
   if (check) {
@@ -47,6 +53,18 @@ async function main(arguments_: string[]): Promise<void> {
     await writeProjection(outputDirectory, receipt);
     console.log(`Projected with ${projector.projectorId} -> ${outputArgument}`);
   }
+}
+
+function inferBuiltInProjector(authority: unknown): string {
+  if (
+    authority !== null
+    && typeof authority === "object"
+    && !Array.isArray(authority)
+    && (authority as Readonly<Record<string, unknown>>).projectionType === "declarative-typescript-projection.v1"
+  ) {
+    return declarativeTypeScriptProjector.projectorId;
+  }
+  throw new Error("No shipped compiler recognizes this authority projectionType; specify a platform backend explicitly.");
 }
 
 function selectProjector(module: Readonly<Record<string, unknown>>): CodeProjector {
@@ -199,7 +217,8 @@ function manifest(receipt: CodeProjectionReceipt): string {
 }
 
 function printHelp(): void {
-  console.log("Usage: semantic-project <projector-module> <authority.json> <output-directory> [--options <options.json>] [--check]");
+  console.log("Usage: semantic-project <authority.json> <output-directory> [--options <options.json>] [--check]");
+  console.log("   or: semantic-project <built-in-projector-id|projector-module> <authority.json> <output-directory> [--options <options.json>] [--check]");
   console.log("");
-  console.log("Loads a consumer-owned projector and projects semantic authority into deterministic code artifacts.");
+  console.log("Infers a shipped compiler from authority, or uses an explicitly selected platform backend.");
 }

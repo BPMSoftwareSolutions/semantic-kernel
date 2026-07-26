@@ -1,5 +1,6 @@
 export * from "./catalog/semantic-catalog.js";
 export * from "./contracts/code-projection.contract.js";
+export * from "./contracts/declarative-code-body.contract.js";
 export * from "./contracts/decision.contract.js";
 export * from "./contracts/execution.contract.js";
 export * from "./contracts/iteration.contract.js";
@@ -9,4 +10,5 @@ export * from "./contracts/projection.contract.js";
 export * from "./kernel/semantic-kernel.js";
 export * from "./ports/port-registry.js";
 export * from "./projection/code-projector-registry.js";
+export * from "./projectors/declarative-typescript-projector.js";
 export * from "./types/json.type.js";
