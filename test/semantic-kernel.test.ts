@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SemanticKernel } from "../src/index.js";
+import { createSemanticKernel, executeRelationalQuery, SemanticKernel, SemanticKernelError } from "../src/index.js";
 
 const kernel = new SemanticKernel();
 kernel.catalog.registerDecision({
@@ -28,6 +28,56 @@ test("applies a declared DTO projection", () => {
   assert.deepEqual(kernel.project("project-copy-request", { placement: { id: "p1", source: "/a", target: "/b" } }), { operationId: "p1", sourcePath: "/a", targetPath: "/b", overwrite: false });
 });
 
+test("fails closed when a required projection path is absent", () => {
+  const requiredPathKernel = new SemanticKernel();
+  requiredPathKernel.catalog.registerProjection({
+    declarationType: "projection.v1",
+    projectionId: "project-required-path",
+    expression: { kind: "read", path: "$.required", required: true },
+  });
+  assert.throws(
+    () => requiredPathKernel.project("project-required-path", {}),
+    (error: unknown) => error instanceof SemanticKernelError && error.code === "PROJECTION_REQUIRED_PATH_MISSING",
+  );
+});
+
+test("filters, maps, and counts collections through declared projection expressions", () => {
+  const collectionKernel = new SemanticKernel();
+  const filtered = {
+    kind: "filter" as const,
+    collection: { kind: "read" as const, path: "$.rows", required: true },
+    itemPath: "$.item",
+    when: {
+      operator: "equals" as const,
+      left: { kind: "path" as const, path: "$.item.kind" },
+      right: { kind: "value" as const, value: "accepted" },
+    },
+  };
+  collectionKernel.catalog.registerProjection({
+    declarationType: "projection.v1",
+    projectionId: "project-collection-summary",
+    expression: {
+      kind: "object",
+      fields: {
+        count: { kind: "count", expression: filtered },
+        items: {
+          kind: "map",
+          collection: filtered,
+          itemPath: "$.item",
+          expression: {
+            kind: "object",
+            fields: { id: { kind: "read", path: "$.item.id", required: true } },
+          },
+        },
+      },
+    },
+  });
+  assert.deepEqual(
+    collectionKernel.project("project-collection-summary", { rows: [{ id: "a", kind: "accepted" }, { id: "b", kind: "other" }] }),
+    { count: 1, items: [{ id: "a" }] },
+  );
+});
+
 test("executes declared iteration in source order", () => {
   assert.deepEqual(kernel.iterate("project-items", { items: ["a", "b"] }), [{ value: "a", index: 0 }, { value: "b", index: 1 }]);
 });
@@ -45,4 +95,87 @@ test("executes a semantic model through a registered mechanical port and emits p
   assert.equal(receipt.disposition, "EXECUTION_COMPLETED");
   assert.equal(receipt.steps.length, 4);
   assert.equal(receipt.observations.length, 1);
+});
+
+test("registers capability packs and exposes collapsed semantic edges", async () => {
+  const packedKernel = createSemanticKernel();
+  packedKernel.registerCapabilityPacks([{
+    decisions: [{
+      declarationType: "decision.v1",
+      decisionId: "resolve-example",
+      noMatchDisposition: "reject",
+      rules: [{ ruleId: "always", when: { operator: "always" }, then: "resolved" }],
+    }],
+    projections: [{
+      declarationType: "projection.v1",
+      projectionId: "project-example",
+      expression: { kind: "object", fields: { value: { kind: "read", path: "$.value" } } },
+    }],
+    invocations: {
+      "execute-example": async (context: unknown) => ({ executed: context }),
+    },
+  }]);
+
+  assert.equal(await packedKernel.edges.invokes("resolve-example", {}), "resolved");
+  assert.deepEqual(packedKernel.edges.projects("project-example", { value: "projected" }), { value: "projected" });
+  assert.deepEqual(await packedKernel.edges.invokes("execute-example", { value: "input" }), { executed: { value: "input" } });
+});
+
+test("seats validated port adapters and rejects invalid packs", async () => {
+  const packedKernel = createSemanticKernel();
+  packedKernel.seatPortAdapters({ echoes: async (input: unknown) => input });
+  assert.deepEqual(await packedKernel.ports.invoke("echoes", { value: "echoed" }), { value: "echoed" });
+  assert.throws(
+    () => packedKernel.registerCapabilityPacks([{ decisions: "not-an-array" }]),
+    (error: unknown) => error instanceof SemanticKernelError && error.code === "INVALID_CAPABILITY_PACK",
+  );
+});
+
+test("executes a domain-neutral relational plan with joins grouping and aggregation", () => {
+  const result = executeRelationalQuery({
+    planType: "relational-query-plan.v1",
+    ctes: {},
+    from: { sourceId: "orders", alias: "o" },
+    joins: [{
+      kind: "inner",
+      source: { sourceId: "customers", alias: "c" },
+      on: {
+        kind: "binary",
+        operator: "equals",
+        left: { kind: "reference", path: ["o", "customerId"] },
+        right: { kind: "reference", path: ["c", "id"] },
+      },
+    }],
+    groupBy: [{ kind: "reference", path: ["c", "name"] }],
+    selections: [
+      { expression: { kind: "reference", path: ["c", "name"] }, alias: "customer" },
+      {
+        expression: {
+          kind: "call",
+          function: "sum",
+          arguments: [{ kind: "reference", path: ["o", "amount"] }],
+        },
+        alias: "total",
+      },
+    ],
+    distinct: false,
+    orderBy: [{ expression: { kind: "reference", path: ["total"] }, direction: "descending" }],
+    offset: 0,
+  }, {
+    orders: [
+      { customerId: 1, amount: 4 },
+      { customerId: 1, amount: 6 },
+      { customerId: 2, amount: 3 },
+    ],
+    customers: [{ id: 1, name: "Ada" }, { id: 2, name: "Lin" }],
+  });
+
+  assert.deepEqual(result, {
+    columns: ["customer", "total"],
+    rows: [
+      { customer: "Ada", total: 10 },
+      { customer: "Lin", total: 3 },
+    ],
+    rowCount: 2,
+  });
 });

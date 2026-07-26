@@ -19,6 +19,10 @@ export class SemanticCatalog {
   public projection(id: string): ProjectionDeclaration { return this.#required(this.#projections, "projection", id); }
   public iteration(id: string): IterationDeclaration { return this.#required(this.#iterations, "iteration", id); }
   public execution(id: string): ExecutionModel { return this.#required(this.#executions, "execution model", id); }
+  public hasDecision(id: string): boolean { return this.#decisions.has(id); }
+  public hasProjection(id: string): boolean { return this.#projections.has(id); }
+  public hasIteration(id: string): boolean { return this.#iterations.has(id); }
+  public hasExecution(id: string): boolean { return this.#executions.has(id); }
 
   #register<T>(map: Map<string, T>, id: string, value: T): void {
     if (map.has(id)) throw new SemanticKernelError("DUPLICATE_DECLARATION", `Declaration already registered: ${id}`, { id });

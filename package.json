@@ -8,10 +8,14 @@
   "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
   "files": ["dist", "README.md", "LICENSE"],
   "scripts": {
-    "clean": "rm -rf dist",
+    "clean": "node -e \"const fs=require('node:fs'); for(const path of ['dist','dist-test']) fs.rmSync(path, { recursive: true, force: true })\"",
     "build": "npm run clean && tsc -p tsconfig.json",
-    "test": "npm run build && node --test dist/test/*.test.js",
+    "test": "npm run build && tsc -p tsconfig.test.json && node test/run-tests.mjs",
     "check": "npm run test"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "typescript": "^5.8.3"
   },
   "engines": { "node": ">=20" },
   "license": "MIT"

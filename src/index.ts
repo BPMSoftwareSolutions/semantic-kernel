@@ -5,6 +5,8 @@ export * from "./contracts/iteration.contract.js";
 export * from "./contracts/kernel-error.js";
 export * from "./contracts/predicate.contract.js";
 export * from "./contracts/projection.contract.js";
+export * from "./contracts/relational.contract.js";
+export * from "./kernel/relational-query-engine.js";
 export * from "./kernel/semantic-kernel.js";
 export * from "./ports/port-registry.js";
 export * from "./types/json.type.js";
