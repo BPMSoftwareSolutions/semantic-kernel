@@ -6,6 +6,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "bin": { "semantic-project": "./dist/cli/project-code.js" },
   "files": ["dist", "README.md", "LICENSE"],
   "scripts": {
     "clean": "node -e \"const fs=require('node:fs'); for(const path of ['dist','dist-test']) fs.rmSync(path, { recursive: true, force: true })\"",

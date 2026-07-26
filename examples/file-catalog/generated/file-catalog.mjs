@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-// Generated from examples/file-catalog/semantic-authority/file-catalog.cli.v1.json.
 // Semantic authority: catalog-files
-// Re-project with: node tools/project-cli.mjs examples/file-catalog/semantic-authority/file-catalog.cli.v1.json examples/file-catalog/generated/file-catalog.mjs
+// Projector: example.file-catalog.node-cli.v1
 
 import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";

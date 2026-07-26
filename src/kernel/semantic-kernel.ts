@@ -1,4 +1,5 @@
 import type { ExecutionReceipt, ExecutionStep, StepTestimony } from "../contracts/execution.contract.js";
+import type { CodeProjectionReceipt, CodeProjector } from "../contracts/code-projection.contract.js";
 import type { DecisionDeclaration } from "../contracts/decision.contract.js";
 import type { IterationDeclaration } from "../contracts/iteration.contract.js";
 import { SemanticKernelError } from "../contracts/kernel-error.js";
@@ -11,12 +12,15 @@ import { resolveDecision } from "./decision-resolver.js";
 import { executeIteration } from "./iteration-executor.js";
 import { readPath, writePath } from "./path-accessor.js";
 import { applyProjection } from "./projection-engine.js";
+import { CodeProjectorRegistry } from "../projection/code-projector-registry.js";
+import { projectCode as executeCodeProjection } from "../projection/project-code.js";
 
 export type SemanticInvocation = (context: unknown) => unknown | Promise<unknown>;
 
 export type SemanticEdges = Readonly<{
   invokes<TResult = unknown>(semanticIdentity: string, context: unknown): Promise<TResult>;
   projects<TResult = unknown>(projectionIdentity: string, context: unknown): TResult;
+  projectsCode(projectorIdentity: string, authority: unknown, options?: unknown): Promise<CodeProjectionReceipt>;
 }>;
 
 export type CapabilityPack = Readonly<{
@@ -25,18 +29,25 @@ export type CapabilityPack = Readonly<{
   iterations?: readonly IterationDeclaration[];
   executions?: readonly import("../contracts/execution.contract.js").ExecutionModel[];
   invocations?: Readonly<Record<string, SemanticInvocation>>;
+  codeProjectors?: readonly CodeProjector[];
 }>;
 
 export class SemanticKernel {
   readonly #invocations = new Map<string, SemanticInvocation>();
   public readonly edges: SemanticEdges;
 
-  public constructor(public readonly catalog = new SemanticCatalog(), public readonly ports = new PortRegistry()) {
+  public constructor(
+    public readonly catalog = new SemanticCatalog(),
+    public readonly ports = new PortRegistry(),
+    public readonly codeProjectors = new CodeProjectorRegistry(),
+  ) {
     this.edges = Object.freeze({
       invokes: async <TResult = unknown>(semanticIdentity: string, context: unknown): Promise<TResult> =>
         this.#invoke(semanticIdentity, context) as Promise<TResult>,
       projects: <TResult = unknown>(projectionIdentity: string, context: unknown): TResult =>
         this.project(projectionIdentity, requireJsonValue(context)) as TResult,
+      projectsCode: async (projectorIdentity: string, authority: unknown, options?: unknown): Promise<CodeProjectionReceipt> =>
+        this.projectCode(projectorIdentity, authority, options),
     });
   }
 
@@ -53,6 +64,7 @@ export class SemanticKernel {
         }
         this.#invocations.set(identity, invocation);
       }
+      for (const projector of pack.codeProjectors ?? []) this.codeProjectors.register(projector);
     }
   }
 
@@ -67,6 +79,18 @@ export class SemanticKernel {
 
   public resolve(decisionId: string, context: JsonValue): JsonValue { return resolveDecision(this.catalog.decision(decisionId), context); }
   public project(projectionId: string, context: JsonValue): JsonValue { return applyProjection(this.catalog.projection(projectionId), context); }
+  public async projectCode(
+    projectorId: string,
+    authority: unknown,
+    options?: unknown,
+  ): Promise<CodeProjectionReceipt> {
+    return executeCodeProjection(
+      this.codeProjectors,
+      projectorId,
+      requireJsonValue(authority),
+      requireJsonObjectOption(options),
+    );
+  }
   public iterate(iterationId: string, context: JsonValue): JsonValue[] {
     const declaration = this.catalog.iteration(iterationId);
     return executeIteration(declaration, this.catalog.projection(declaration.projectionId), context);
@@ -124,13 +148,19 @@ export class SemanticKernel {
   }
 }
 
-export function createSemanticKernel(_options?: unknown): SemanticKernel {
-  return new SemanticKernel();
+export type SemanticKernelOptions = Readonly<{
+  codeProjectors?: readonly CodeProjector[];
+}>;
+
+export function createSemanticKernel(options: SemanticKernelOptions = {}): SemanticKernel {
+  const kernel = new SemanticKernel();
+  for (const projector of options.codeProjectors ?? []) kernel.codeProjectors.register(projector);
+  return kernel;
 }
 
 function requireCapabilityPack(candidate: unknown): CapabilityPack {
   if (!isRecord(candidate)) throw new SemanticKernelError("INVALID_CAPABILITY_PACK", "Capability pack must be an object.");
-  for (const key of ["decisions", "projections", "iterations", "executions"] as const) {
+  for (const key of ["decisions", "projections", "iterations", "executions", "codeProjectors"] as const) {
     const value = candidate[key];
     if (value !== undefined && !Array.isArray(value)) {
       throw new SemanticKernelError("INVALID_CAPABILITY_PACK", `Capability pack ${key} must be an array.`, { key });
@@ -150,15 +180,29 @@ function requireJsonObject(value: JsonValue): JsonObject {
   return value as JsonObject;
 }
 
+function requireJsonObjectOption(value: unknown): JsonObject {
+  if (value === undefined) return {};
+  return requireJsonObject(requireJsonValue(value));
+}
+
 function requireJsonValue(value: unknown): JsonValue {
   if (!isJsonValue(value)) throw new SemanticKernelError("NON_JSON_VALUE", "Semantic execution values must be JSON-compatible.");
   return value;
 }
 
-function isJsonValue(value: unknown): value is JsonValue {
-  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return true;
-  if (Array.isArray(value)) return value.every(isJsonValue);
-  return isRecord(value) && Object.values(value).every(isJsonValue);
+function isJsonValue(value: unknown, ancestors = new Set<object>()): value is JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return isJsonCollection(value, ancestors, value);
+  return isRecord(value) && isJsonCollection(value, ancestors, Object.values(value));
+}
+
+function isJsonCollection(collection: object, ancestors: Set<object>, values: readonly unknown[]): boolean {
+  if (ancestors.has(collection)) return false;
+  ancestors.add(collection);
+  const valid = values.every((value) => isJsonValue(value, ancestors));
+  ancestors.delete(collection);
+  return valid;
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

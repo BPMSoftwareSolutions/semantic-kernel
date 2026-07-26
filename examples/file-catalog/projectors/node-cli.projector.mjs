@@ -1,47 +1,50 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+export const projector = Object.freeze({
+  projectorId: "example.file-catalog.node-cli.v1",
+  project({ authority }) {
+    const content = projectCli(authority);
+    return {
+      targetId: "node-cli.esm.v1",
+      artifacts: [{ path: "file-catalog.mjs", content, executable: true }],
+      metadata: { capabilityId: authority.capabilityId },
+    };
+  },
+});
 
-const [authorityArgument, outputArgument, mode] = process.argv.slice(2);
-
-if (!authorityArgument || !outputArgument) {
-  console.error("Usage: node tools/project-cli.mjs <authority.json> <output.mjs> [--check]");
-  process.exitCode = 2;
-} else {
-  const authorityPath = resolve(authorityArgument);
-  const outputPath = resolve(outputArgument);
-  const authority = JSON.parse(await readFile(authorityPath, "utf8"));
-  const projectedCode = projectCli(authority, authorityArgument);
-
-  if (mode === "--check") {
-    const currentCode = await readFile(outputPath, "utf8").catch(() => "");
-    if (currentCode !== projectedCode) {
-      console.error(`Projection is stale: ${outputArgument}`);
-      process.exitCode = 1;
-    } else {
-      console.log(`Projection is current: ${outputArgument}`);
-    }
-  } else {
-    await mkdir(dirname(outputPath), { recursive: true });
-    await writeFile(outputPath, projectedCode, "utf8");
-    console.log(`Projected ${authority.capabilityId} -> ${outputArgument}`);
-  }
-}
-
-function projectCli(authority, authorityArgument) {
+function projectCli(authority) {
+  requireRecord(authority, "authority");
   requireValue(authority.semanticLayer === "projectable-cli.v1", "semanticLayer must be projectable-cli.v1");
   requireString(authority.capabilityId, "capabilityId");
   requireString(authority.command?.name, "command.name");
   requireString(authority.command?.description, "command.description");
   requireValue(authority.source?.kind === "filesystem-entries", "source.kind must be filesystem-entries");
-  requireValue(authority.source?.root?.fromInput, "source.root.fromInput is required");
+  requireString(authority.source?.root?.fromInput, "source.root.fromInput");
+  requireValue(Array.isArray(authority.inputs) && authority.inputs.length === 1, "inputs must contain exactly one positional input");
+  requireValue(Array.isArray(authority.options), "options must be an array");
   requireValue(Array.isArray(authority.selection) && authority.selection.length > 0, "selection must not be empty");
-  requireValue(Array.isArray(authority.presentation?.columns), "presentation.columns is required");
+  requireValue(Array.isArray(authority.presentation?.columns) && authority.presentation.columns.length > 0, "presentation.columns must not be empty");
+  requireString(authority.presentation.emptyMessage, "presentation.emptyMessage");
+  requireValue(
+    Array.isArray(authority.source.entryKinds) && authority.source.entryKinds.length > 0,
+    "source.entryKinds must not be empty",
+  );
+  requireUnique(authority.source.entryKinds, "source.entryKinds");
+  for (const kind of authority.source.entryKinds) {
+    requireValue(["file", "directory", "symbolic-link", "other"].includes(kind), `unsupported entry kind: ${kind}`);
+  }
 
+  for (const candidate of authority.inputs) requireRecord(candidate, "inputs[]");
   const input = authority.inputs?.find((candidate) => candidate.id === authority.source.root.fromInput);
   requireValue(input?.kind === "positional", `root input ${authority.source.root.fromInput} must be positional`);
+  requireString(input.id, "inputs[].id");
+  requireString(input.description, "inputs[].description");
+  requireString(input.default, "inputs[].default");
 
+  const fieldIds = new Set();
   const fields = authority.selection.map((field) => {
+    requireRecord(field, "selection[]");
     requireString(field.id, "selection[].id");
+    requireValue(!fieldIds.has(field.id), `duplicate selection field: ${field.id}`);
+    fieldIds.add(field.id);
     requireValue(
       ["name", "relativePath", "sizeBytes", "modifiedAt", "entryKind"].includes(field.fromSource),
       `unsupported source property: ${field.fromSource}`,
@@ -50,17 +53,43 @@ function projectCli(authority, authorityArgument) {
   });
 
   for (const column of authority.presentation.columns) {
+    requireRecord(column, "presentation.columns[]");
     requireValue(fields.some((field) => field.id === column.field), `unknown presentation field: ${column.field}`);
+    requireString(column.label, "presentation.columns[].label");
     requireValue(["text", "bytes", "iso-timestamp"].includes(column.format), `unsupported format: ${column.format}`);
+    requireValue(["left", "right"].includes(column.align), `unsupported alignment: ${column.align}`);
   }
+  requireUnique(authority.presentation.columns.map((column) => column.field), "presentation.columns[].field");
 
   const sort = authority.orderBy ?? [];
+  requireValue(Array.isArray(sort), "orderBy must be an array");
   for (const term of sort) {
+    requireRecord(term, "orderBy[]");
     requireValue(fields.some((field) => field.id === term.field), `unknown order field: ${term.field}`);
     requireValue(["ascending", "descending"].includes(term.direction), `unsupported direction: ${term.direction}`);
   }
 
   const options = authority.options ?? [];
+  const optionIds = new Set();
+  const optionFlags = new Set(["-h", "--help"]);
+  for (const option of options) {
+    requireRecord(option, "options[]");
+    requireString(option.id, "options[].id");
+    requireValue(!optionIds.has(option.id), `duplicate option id: ${option.id}`);
+    optionIds.add(option.id);
+    requireValue(option.kind === "boolean", `option ${option.id} must be boolean`);
+    requireString(option.long, `option ${option.id}.long`);
+    requireValue(/^--[a-z][a-z0-9-]*$/u.test(option.long), `invalid long flag: ${option.long}`);
+    requireValue(!optionFlags.has(option.long), `duplicate or reserved option flag: ${option.long}`);
+    optionFlags.add(option.long);
+    if (option.short !== undefined) {
+      requireValue(/^-[A-Za-z0-9]$/u.test(option.short), `invalid short flag: ${option.short}`);
+      requireValue(!optionFlags.has(option.short), `duplicate or reserved option flag: ${option.short}`);
+      optionFlags.add(option.short);
+    }
+    requireString(option.description, `option ${option.id}.description`);
+    requireValue(typeof option.default === "boolean", `option ${option.id}.default must be Boolean`);
+  }
   const recursiveOption = optionFor(options, authority.source.recursive?.fromOption);
   const hiddenOption = optionFor(options, authority.source.includeHidden?.fromOption);
   const jsonOption = optionFor(options, authority.presentation.json?.fromOption);
@@ -82,9 +111,8 @@ function projectCli(authority, authorityArgument) {
   };
 
   return `#!/usr/bin/env node
-// Generated from ${authorityArgument.replaceAll("\\", "/")}.
 // Semantic authority: ${authority.capabilityId}
-// Re-project with: node tools/project-cli.mjs ${authorityArgument.replaceAll("\\", "/")} ${process.argv[3]?.replaceAll("\\", "/") ?? "<output.mjs>"}
+// Projector: example.file-catalog.node-cli.v1
 
 import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -240,6 +268,14 @@ function optionFor(options, id) {
 
 function requireString(value, name) {
   requireValue(typeof value === "string" && value.length > 0, `${name} must be a non-empty string`);
+}
+
+function requireRecord(value, name) {
+  requireValue(value !== null && typeof value === "object" && !Array.isArray(value), `${name} must be an object`);
+}
+
+function requireUnique(values, name) {
+  requireValue(new Set(values).size === values.length, `${name} values must be unique`);
 }
 
 function requireValue(condition, message) {
