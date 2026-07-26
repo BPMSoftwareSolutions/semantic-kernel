@@ -1,0 +1,12 @@
+{
+  "decision": {
+    "declarationType": "decision.v1",
+    "decisionId": "resolve-file-placement-disposition",
+    "noMatchDisposition": "reject",
+    "rules": [
+      { "ruleId": "authorize-when-target-absent", "when": { "operator": "equals", "left": { "kind": "path", "path": "$.target.exists" }, "right": { "kind": "value", "value": false } }, "then": "authorize-copy" },
+      { "ruleId": "noop-when-content-matches", "when": { "operator": "equals", "left": { "kind": "path", "path": "$.source.hash" }, "right": { "kind": "path", "path": "$.target.hash" } }, "then": "declare-noop" },
+      { "ruleId": "reject-conflict", "when": { "operator": "always" }, "then": "reject-target-conflict" }
+    ]
+  }
+}
