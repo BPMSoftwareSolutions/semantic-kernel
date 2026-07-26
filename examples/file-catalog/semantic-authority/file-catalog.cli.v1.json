@@ -1,0 +1,65 @@
+{
+  "semanticLayer": "projectable-cli.v1",
+  "capabilityId": "catalog-files",
+  "command": {
+    "name": "file-catalog",
+    "description": "Display files with their sizes and modification timestamps."
+  },
+  "inputs": [
+    {
+      "id": "path",
+      "kind": "positional",
+      "description": "File or directory to inspect",
+      "default": "."
+    }
+  ],
+  "options": [
+    {
+      "id": "recursive",
+      "kind": "boolean",
+      "short": "-r",
+      "long": "--recursive",
+      "description": "Include files in descendant directories",
+      "default": false
+    },
+    {
+      "id": "includeHidden",
+      "kind": "boolean",
+      "short": "-a",
+      "long": "--all",
+      "description": "Include entries whose names begin with a dot",
+      "default": false
+    },
+    {
+      "id": "json",
+      "kind": "boolean",
+      "long": "--json",
+      "description": "Render the selected semantic fields as JSON",
+      "default": false
+    }
+  ],
+  "source": {
+    "kind": "filesystem-entries",
+    "root": { "fromInput": "path" },
+    "entryKinds": ["file"],
+    "recursive": { "fromOption": "recursive" },
+    "includeHidden": { "fromOption": "includeHidden" }
+  },
+  "selection": [
+    { "id": "file", "fromSource": "relativePath" },
+    { "id": "bytes", "fromSource": "sizeBytes" },
+    { "id": "modified", "fromSource": "modifiedAt" }
+  ],
+  "orderBy": [
+    { "field": "file", "direction": "ascending" }
+  ],
+  "presentation": {
+    "columns": [
+      { "field": "file", "label": "FILE", "format": "text", "align": "left" },
+      { "field": "bytes", "label": "SIZE", "format": "bytes", "align": "right" },
+      { "field": "modified", "label": "MODIFIED", "format": "iso-timestamp", "align": "left" }
+    ],
+    "emptyMessage": "No matching files.",
+    "json": { "fromOption": "json" }
+  }
+}
